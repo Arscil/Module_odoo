@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_looker_order_tree" model="ir.ui.view">
+        <field name="name">looker.order.report.tree</field>
+        <field name="model">looker_studio.order_report</field>
+        <field name="arch" type="xml">
+            <list string="Order Reports">
+                <field name="name"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_looker_order_form" model="ir.ui.view">
+        <field name="name">looker.order.report.form</field>
+        <field name="model">looker_studio.order_report</field>
+        <field name="arch" type="xml">
+            <form string="Order Report">
+                <header>
+                    <button name="action_preview" type="object" string="Xem trước" class="btn-primary"/>
+                </header>
+                <sheet>
+                    <group>
+                        <field name="name"/>
+                        <separator string="Nguồn dữ liệu: Sale Orders (sale.order)"/>
+                        <field name="group_field"/>
+                        <field name="value_field"/>
+                        <field name="pie_description"/>
+                        <field name="line_description"/>
+                        <field name="bar_description"/>
+                        <field name="limit"/>
+                    </group>
+                    <footer>
+                        <button type="object" name="action_preview" string="Preview" class="btn-primary"/>
+                    </footer>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_looker_order_reports" model="ir.actions.act_window">
+        <field name="name">Báo cáo Đơn hàng</field>
+        <field name="res_model">looker_studio.order_report</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_looker_order_reports" name="Báo cáo Đơn hàng" parent="menu_looker_root" action="action_looker_order_reports"/>
+
+</odoo>

@@ -317,3 +317,211 @@ class LookerReport(models.Model):
             'url': f'/looker_studio/report/{self.id}',
             'target': 'new',
         }
+
+
+class LookerOrderReport(models.Model):
+    """Report record targeting sale.order (Quotations / Orders).
+
+    This parallel model keeps CRM reports unchanged while providing a focused
+    report type for sale orders. It supports grouping by partner location
+    (country/state), salesperson, and date-based dimensions (day, weekday).
+    """
+
+    _name = 'looker_studio.order_report'
+    _description = 'Looker Studio - Order Report (sale.order)'
+
+    name = fields.Char(required=True)
+    domain = fields.Text(string='Domain', help='Python literal list domain, e.g. [("state","=","sale")])')
+    group_field = fields.Selection(selection='_get_order_group_fields', string='Group By Field', help='Sale order field to group by')
+    value_field = fields.Selection(selection='_get_order_value_fields', string='Value Field', help='Numeric sale.order field to aggregate (sum)')
+    chart_type = fields.Selection([('bar', 'Bar'), ('line', 'Line'), ('pie', 'Pie')], default='bar')
+    limit = fields.Integer(string='Limit', default=1000)
+
+    pie_description = fields.Text(string='Pie description')
+    line_description = fields.Text(string='Line description')
+    bar_description = fields.Text(string='Bar description')
+
+    @api.model
+    def _get_order_group_fields(self):
+        allowed = ['partner_id', 'partner_id.country_id', 'partner_id.state_id', 'user_id', 'date_order', 'date_order_weekday']
+        res = []
+        for name in allowed:
+            # Try to find a field when it's a direct field on sale.order
+            if '.' not in name:
+                f = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order'), ('name', '=', name)], limit=1)
+                if f:
+                    res.append((f.name, f.field_description or f.name))
+                else:
+                    # For computed helpers like date_order_weekday add a friendly label
+                    if name == 'date_order_weekday':
+                        res.append((name, 'Ngày trong tuần'))
+            else:
+                # For relational subfields, present a friendly label
+                if name == 'partner_id.country_id':
+                    res.append((name, 'Quốc gia (Đối tác)'))
+                elif name == 'partner_id.state_id':
+                    res.append((name, 'Tỉnh/Thành (Đối tác)'))
+        # Fallback: scan sale.order fields for common types
+        if not res:
+            fields = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order')])
+            for f in fields:
+                if f.ttype in ('char', 'selection', 'many2one'):
+                    res.append((f.name, f.field_description or f.name))
+        return res
+
+    @api.model
+    def _get_order_value_fields(self):
+        # Prefer common sale.order monetary fields present on most databases
+        allowed = ['amount_total', 'amount_untaxed', 'amount_tax']
+        res = []
+        for name in allowed:
+            f = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order'), ('name', '=', name)], limit=1)
+            if f and f.ttype in ('integer', 'float', 'monetary'):
+                res.append((f.name, f.field_description or f.name))
+        if not res:
+            fields = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order')])
+            for f in fields:
+                if f.ttype in ('integer', 'float', 'monetary'):
+                    res.append((f.name, f.field_description or f.name))
+        return res
+
+    def _eval_domain(self):
+        if not self.domain:
+            return []
+        try:
+            return safe_eval(self.domain)
+        except Exception:
+            return []
+
+    def get_chart_data(self):
+        self.ensure_one()
+        Model = self.env['sale.order']
+        domain = self._eval_domain()
+
+        labels = []
+        count_values = []
+        sum_values = []
+
+        try:
+            # Special support: group by weekday
+            if self.group_field == 'date_order_weekday':
+                # build weekday buckets Mon..Sun
+                from datetime import datetime
+                weekday_map = {i: 0 for i in range(7)}
+                sum_map = {i: 0.0 for i in range(7)}
+                rows = Model.search(domain)
+                for r in rows:
+                    dt = r.date_order
+                    if not dt:
+                        continue
+                    if isinstance(dt, str):
+                        try:
+                            dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+                        except Exception:
+                            continue
+                    else:
+                        dt_obj = dt
+                    wd = dt_obj.weekday()
+                    weekday_map[wd] += 1
+                    if self.value_field:
+                        sum_map[wd] += float(getattr(r, self.value_field) or 0.0)
+                days = ['Thứ 2','Thứ 3','Thứ 4','Thứ 5','Thứ 6','Thứ 7','Chủ Nhật']
+                for i in range(7):
+                    labels.append(days[i])
+                    count_values.append(weekday_map.get(i, 0))
+                    sum_values.append(round(sum_map.get(i, 0.0), 2))
+            elif self.group_field and '.' in str(self.group_field):
+                # relational subgroup like partner_id.state_id
+                # perform read_group on the top-level relation
+                top = str(self.group_field).split('.')[0]
+                try:
+                    groups = Model.read_group(domain, [top], [top], lazy=False)
+                except Exception:
+                    groups = []
+                for g in groups:
+                    key = g.get(top)
+                    gid = key[0] if isinstance(key, (list, tuple)) else key
+                    lbl = key[1] if isinstance(key, (list, tuple)) and len(key) > 1 else (key or 'Undefined')
+                    cnt = g.get('__count', 0)
+                    labels.append(str(lbl))
+                    count_values.append(cnt)
+                    # sums via read_group per related id might be expensive; omit or approximate
+                    sum_values.append(0.0)
+            elif self.group_field:
+                try:
+                    groups = Model.read_group(domain, [self.group_field], [self.group_field], lazy=False)
+                except Exception:
+                    groups = []
+                for g in groups:
+                    key = g.get(self.group_field)
+                    gid = key[0] if isinstance(key, (list, tuple)) else key
+                    lbl = key[1] if isinstance(key, (list, tuple)) and len(key) > 1 else (key or 'Undefined')
+                    cnt = g.get('__count', 0)
+                    sval = 0.0
+                    labels.append(str(lbl))
+                    count_values.append(cnt)
+                    sum_values.append(sval)
+            else:
+                total = Model.search_count(domain)
+                labels = ['All']
+                count_values = [total]
+                if self.value_field:
+                    rows = Model.read_group(domain, [self.value_field], [], lazy=False)
+                    total_sum = rows[0].get(self.value_field) if rows else 0.0
+                    sum_values = [total_sum or 0.0]
+                else:
+                    sum_values = [total]
+
+            # Basic time-series: last 14 days by create_date
+            from datetime import datetime, timedelta
+            today = fields.Date.context_today(self)
+            if isinstance(today, str):
+                today_dt = datetime.strptime(today, '%Y-%m-%d')
+            else:
+                today_dt = datetime.combine(today, datetime.min.time())
+            N = 14
+            start_dt = (today_dt - timedelta(days=N - 1)).strftime('%Y-%m-%d 00:00:00')
+            end_dt = (today_dt + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
+            ts_domain = list(domain) + [('create_date', '>=', start_dt), ('create_date', '<', end_dt)]
+            try:
+                if self.value_field:
+                    ts_groups = Model.read_group(ts_domain, ['create_date', self.value_field], ['create_date:day'], lazy=False)
+                else:
+                    ts_groups = Model.read_group(ts_domain, ['create_date'], ['create_date:day'], lazy=False)
+            except Exception:
+                ts_groups = []
+            ts_map = {}
+            for g in ts_groups:
+                key = g.get('create_date')
+                day = key[0] if isinstance(key, (list, tuple)) else key
+                if self.value_field:
+                    ts_map[str(day)] = g.get(self.value_field) or 0.0
+                else:
+                    ts_map[str(day)] = g.get('__count', 0)
+
+            line_labels = []
+            line_values = []
+            for i in range(N):
+                day_dt = (today_dt - timedelta(days=N - 1 - i))
+                day_str = day_dt.strftime('%Y-%m-%d')
+                line_labels.append(day_str)
+                line_values.append(ts_map.get(day_str, 0 if not self.value_field else 0.0))
+
+            return {
+                'labels': labels,
+                'count_values': count_values,
+                'sum_values': sum_values,
+                'line_labels': line_labels,
+                'line_values': line_values,
+            }
+        except Exception:
+            _logger.exception('Unexpected error in get_chart_data for order report %s', getattr(self, 'id', '?'))
+            return {'labels': [], 'count_values': [], 'sum_values': [], 'line_labels': [], 'line_values': []}
+
+    def action_preview(self):
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_url',
+            'url': f'/looker_studio/order_report/{self.id}',
+            'target': 'new',
+        }

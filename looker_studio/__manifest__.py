@@ -9,6 +9,7 @@
     'data': [
         'security/ir.model.access.csv',
         'views/report_views.xml',
+        'views/order_report_views.xml',
         'views/website_templates.xml',
     ],
     'assets': {

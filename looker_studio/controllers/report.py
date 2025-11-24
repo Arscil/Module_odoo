@@ -100,6 +100,49 @@ class LookerReportController(http.Controller):
             'stat_total_value': total_value,
             'stat_avg_value': avg_value,
             'probability_json': json.dumps(probability_values),
+            # Provide the json module to templates so they can call json.loads(...)
+            'json': json,
+            # Some simpler templates expect `values_json` (single dataset); expose counts as values
+            'values_json': json.dumps(counts),
         }
         # Always render the modern 3-chart template on Preview (pie, line, bar)
         return request.render('looker_studio.report_modern_template', context)
+
+    @http.route('/looker_studio/order_report/<int:report_id>', type='http', auth='user', website=True)
+    def render_order_report(self, report_id, **kwargs):
+        report = request.env['looker_studio.order_report'].sudo().browse(report_id)
+        if not report.exists():
+            return request.not_found()
+        data = report.get_chart_data()
+
+        Model = request.env['sale.order'].sudo()
+        domain = report._eval_domain()
+        labels = data.get('labels', [])
+        counts = data.get('count_values', [])
+        sums = data.get('sum_values', [])
+        total_orders = sum(counts) if counts else Model.search_count(domain)
+        total_amount = sum(sums) if sums else 0.0
+        avg_amount = round((float(total_amount) / float(total_orders)), 2) if total_orders and total_amount else 0.0
+
+        # probability_json not meaningful for orders; reuse field for a simple metric line if needed
+        probability_values = data.get('line_values', [])
+
+        context = {
+            'report': report,
+            'labels_json': json.dumps(labels),
+            'counts_json': json.dumps(counts),
+            'sums_json': json.dumps(sums),
+            'line_labels_json': json.dumps(data.get('line_labels', [])),
+            'line_values_json': json.dumps(data.get('line_values', [])),
+            'line_is_percentage': 0,
+            'stat_total_leads': total_orders,
+            'stat_success_leads': 0,
+            'stat_success_pct': 0.0,
+            'stat_total_value': total_amount,
+            'stat_avg_value': avg_amount,
+            'probability_json': json.dumps(probability_values),
+            'json': json,
+            'values_json': json.dumps(counts),
+        }
+        # Render order-specific template with sales-appropriate labels
+        return request.render('looker_studio.report_order_template', context)
