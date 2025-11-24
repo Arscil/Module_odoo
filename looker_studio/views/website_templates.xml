@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="looker_embed_template" name="Looker Studio Embed">
+        <t>
+            <div class="container mt16" style="padding:12px 18px;box-sizing:border-box;overflow-x:auto;">
+                <h1 t-esc="connection.name"/>
+                <div class="looker-embed" style="width:100%;height:80vh;">
+                    <iframe t-att-src="embed_url" style="width:100%;height:100%;border:0;" allowfullscreen="true"></iframe>
+                </div>
+            </div>
+        </t>
+    </template>
+
+    <template id="report_template" name="Report Template">
+        <t>
+            <div class="container mt16" style="padding:12px 18px;box-sizing:border-box;overflow-x:auto;">
+                <h1 t-esc="report.name"/>
+                <div class="report-chart-container" style="max-width:100%;">
+                    <style>
+                        .report-chart-container { height: 38vh; max-height: 360px; min-height: 220px; }
+                        #looker_report_chart { width:100% !important; height:100% !important; }
+                    </style>
+                    <canvas id="looker_report_chart"></canvas>
+                </div>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <script>
+                (function(){
+                    // inject JSON arrays directly
+                    var labels = <t t-raw="labels_json"/> || [];
+                    var values = <t t-raw="values_json"/> || [];
+                    var ctx = document.getElementById('looker_report_chart').getContext('2d');
+                    var chartType = '<t t-esc="report.chart_type"/>' || 'bar';
+                    new Chart(ctx, {
+                        type: chartType,
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: '<t t-esc="report.name"/>',
+                                data: values,
+                                backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false }
+                    });
+                })();
+            </script>
+        </t>
+    </template>
+    
+    <template id="report_modern_template" name="Modern Report Template">
+        <t>
+            <div class="container mt24" style="padding:12px 18px;box-sizing:border-box;overflow-x:auto;">
+                <h1 t-esc="report.name"/>
+                <style>
+                    .ls-modern { display: grid; grid-template-columns: 1fr minmax(240px,360px); grid-template-rows: minmax(180px,40vh) minmax(140px,30vh); gap: 18px; align-items:start; box-sizing: border-box; }
+                    .ls-modern .main { background: #fff; padding: 12px; border:1px solid #eee; overflow: hidden; }
+                    .ls-modern .side { background: #fff; padding: 18px; border:1px solid #eee; display:flex; flex-direction:column; gap:12px; box-sizing:border-box; max-height: calc(100vh - 120px); overflow:auto; }
+                    .ls-modern .lower { background: #fff; padding: 12px; border:1px solid #eee; overflow: hidden; }
+                    .ls-legend { list-style:none; padding:0; margin:12px 0 0 0; }
+                    .ls-legend li { display:flex; align-items:center; margin:6px 0; }
+                    .ls-legend .swatch { width:14px; height:14px; display:inline-block; margin-right:8px; }
+                    table.ls-table { width:100%; border-collapse: collapse; }
+                    table.ls-table th, table.ls-table td { border: 1px solid #f0f0f0; padding:8px; font-size:13px; }
+                </style>
+
+                    <div class="ls-modern">
+                    <div class="main">
+                        <canvas id="modern_pie" t-att-data-labels="labels_json" t-att-data-values="counts_json" style="width:100%;height:100%;max-height:260px;min-height:160px;display:block;"></canvas>
+                        <p t-if="report.pie_description" style="margin-top:8px;color:#555;" t-esc="report.pie_description"/>
+                    </div>
+                    <div class="side">
+                        <h3>Bảng thống kê</h3>
+                        <div style="margin-bottom:8px;">
+                            <canvas id="modern_stats_line" t-att-data-labels="labels_json" t-att-data-values="probability_json" data-is-percentage="1" style="width:100%;height:100%;max-height:200px;min-height:150px;display:block;"></canvas>
+                        </div>
+                        <p style="margin-top:6px;color:#555;">Thống kê Xác suất AI (Probability) trung bình theo từng danh mục.</p>
+                        <h4 style="margin-top:12px;margin-bottom:6px;">Top danh mục</h4>
+                        <table class="ls-table">
+                            <thead><tr><th>Danh mục</th><th style="text-align:right;">Số lượng</th><th style="text-align:right;">Giá trị</th></tr></thead>
+                            <tbody>
+                                <t t-set="_labels" t-value="json.loads(labels_json) if labels_json else []"/>
+                                <t t-set="_counts" t-value="json.loads(counts_json) if counts_json else []"/>
+                                <t t-set="_sums" t-value="json.loads(sums_json) if sums_json else []"/>
+                                <t t-set="_n" t-value="min(len(_labels), 6)"/>
+                                <t t-foreach="range(_n)" t-as="j">
+                                    <tr>
+                                        <td t-esc="_labels[j]"/>
+                                        <td style="text-align:right;" t-esc="_counts[j]"/>
+                                        <td style="text-align:right;" t-esc="_sums[j]"/>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="lower" style="grid-column: 1 / 2;">
+                        <h4>Thống kê theo phân loại</h4>
+                        <canvas id="modern_bar" t-att-data-labels="labels_json" t-att-data-values="sums_json" style="width:100%;height:100%;max-height:220px;min-height:120px;display:block;"></canvas>
+                        <p t-if="report.bar_description" style="margin-top:8px;color:#555;" t-esc="report.bar_description"/>
+                    </div>
+                    <div class="lower" style="grid-column: 2 / 3; margin-top: 18px;">
+                        <h4>Chi tiết</h4>
+                        <table class="ls-table">
+                            <thead><tr><th>Category</th><th>Value</th></tr></thead>
+                            <tbody>
+                                <t t-set="_labels2" t-value="json.loads(labels_json) if labels_json else []"/>
+                                <t t-set="_sums2" t-value="json.loads(sums_json) if sums_json else []"/>
+                                <t t-foreach="range(len(_labels2))" t-as="j">
+                                    <tr>
+                                        <td t-esc="_labels2[j]"/>
+                                        <td t-esc="_sums2[j]"/>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                <script>
+                    (function(){
+                        function initCanvas(id){
+                            var el = document.getElementById(id);
+                            if(!el) return;
+                            var labels = [];
+                            var values = [];
+                            try{ labels = JSON.parse(el.getAttribute('data-labels') || '[]'); }catch(e){}
+                            try{ values = JSON.parse(el.getAttribute('data-values') || '[]'); }catch(e){}
+                            return {el: el, labels: labels, values: values};
+                        }
+                        // pie
+                        var pie = initCanvas('modern_pie');
+                        if(pie){
+                            new Chart(pie.el.getContext('2d'), {
+                                type: 'pie',
+                                data: { labels: pie.labels, datasets: [{ data: pie.values, backgroundColor: ['#2b8cff','#7bd0ff','#a6e1ff','#e0e7ff','#f0f4ff'] }] },
+                                options: { responsive: true, maintainAspectRatio: false, plugins:{legend:{display:false}} }
+                            });
+                        }
+                        // stats line chart (Probability by category)
+                        var statsLine = (function(){
+                            var el = document.getElementById('modern_stats_line');
+                            if(!el) return null;
+                            var labels = [];
+                            var values = [];
+                            try{ labels = JSON.parse(el.getAttribute('data-labels') || '[]'); }catch(e){}
+                            try{ values = JSON.parse(el.getAttribute('data-values') || '[]'); }catch(e){}
+                            var isPerc = el.getAttribute('data-is-percentage') === '1';
+                            return {el: el, labels: labels, values: values, isPerc: isPerc};
+                        })();
+                        if(statsLine){
+                            new Chart(statsLine.el.getContext('2d'), {
+                                type: 'line',
+                                data: {
+                                    labels: statsLine.labels,
+                                    datasets: [{
+                                        label: 'Xác suất AI',
+                                        data: statsLine.values,
+                                        borderColor: '#2b8cff',
+                                        backgroundColor: 'rgba(43,140,255,0.12)',
+                                        fill: true,
+                                        tension: 0.3,
+                                        pointRadius: 3,
+                                        pointHoverRadius: 5,
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    plugins: {
+                                        legend: { display: false },
+                                        tooltip: {
+                                            callbacks: {
+                                                label: function(ctx){
+                                                    var v = ctx.parsed.y;
+                                                    return statsLine.isPerc ? (v.toFixed(1) + '%') : (typeof v === 'number' ? v.toLocaleString() : v);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    scales: {
+                                        y: { 
+                                            beginAtZero: true,
+                                            max: 100,
+                                            ticks: { 
+                                                callback: function(v){
+                                                    return statsLine.isPerc ? (v + '%') : (typeof v === 'number' ? v.toLocaleString() : v);
+                                                } 
+                                            } 
+                                        },
+                                        x: { 
+                                            ticks: { 
+                                                autoSkip: false,
+                                                maxRotation: 45, 
+                                                minRotation: 0 
+                                            } 
+                                        }
+                                    },
+                                    elements: { point: { radius: 3 } }
+                                }
+                            });
+                        }
+                        // bar
+                        var bar = initCanvas('modern_bar');
+                        if(bar){
+                            new Chart(bar.el.getContext('2d'), {
+                                type: 'bar',
+                                data: { labels: bar.labels, datasets: [{ label: '', data: bar.values, backgroundColor: '#2b8cff' }] },
+                                options: { responsive: true, maintainAspectRatio: false }
+                            });
+                        }
+                    })();
+                </script>
+            </div>
+        </t>
+    </template>
+</odoo>
