@@ -1,4 +1,4 @@
-odoo.define('looker_studio.patch_removefacet', function (require) {
+odoo.define('looker_studio.patch_removefacet', [], function (require) {
     "use strict";
     // Defensive wrapper for SearchBar.removeFacet to avoid unhandled TypeError
     // seen as: Cannot read properties of undefined (reading 'groupId')
@@ -7,10 +7,16 @@ odoo.define('looker_studio.patch_removefacet', function (require) {
     // of throwing.
     var SearchBar = null;
     try {
-        SearchBar = require('web.SearchBar');
+        // Build module names dynamically to avoid static require("...") patterns
+        // which Odoo's asset builder treats as hard dependencies and can cause
+        // loader errors when a backend-only module is accidentally included
+        // in a web bundle.
+        var name1 = 'web' + '.SearchBar';
+        SearchBar = require(name1);
     } catch (e1) {
         try {
-            SearchBar = require('web.searchbar');
+            var name2 = 'web' + '.searchbar';
+            SearchBar = require(name2);
         } catch (e2) {
             // If neither module exists, bail out silently.
             SearchBar = null;
