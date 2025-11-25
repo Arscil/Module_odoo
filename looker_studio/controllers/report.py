@@ -125,7 +125,22 @@ class LookerReportController(http.Controller):
         avg_amount = round((float(total_amount) / float(total_orders)), 2) if total_orders and total_amount else 0.0
 
         # probability_json not meaningful for orders; reuse field for a simple metric line if needed
-        probability_values = data.get('line_values', [])
+        # Build per-category stats for the small side chart: prefer average (sum/count) per label
+        probability_values = []
+        try:
+            if labels and counts and sums and len(labels) == len(counts) and len(labels) == len(sums):
+                for i in range(len(labels)):
+                    c = counts[i] or 0
+                    s = sums[i] or 0.0
+                    if c:
+                        probability_values.append(round(float(s) / float(c), 2))
+                    else:
+                        probability_values.append(float(s))
+            else:
+                # Fallback: use the time-series line_values if available (may be empty)
+                probability_values = data.get('line_values', []) or []
+        except Exception:
+            probability_values = data.get('line_values', []) or []
 
         context = {
             'report': report,
@@ -133,7 +148,8 @@ class LookerReportController(http.Controller):
             'counts_json': json.dumps(counts),
             'sums_json': json.dumps(sums),
             'line_labels_json': json.dumps(data.get('line_labels', [])),
-            'line_values_json': json.dumps(data.get('line_values', [])),
+            # For order template, line_values_json is used by the small side chart — provide per-category stats
+            'line_values_json': json.dumps(probability_values),
             'line_is_percentage': 0,
             'stat_total_leads': total_orders,
             'stat_success_leads': 0,

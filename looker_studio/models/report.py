@@ -341,9 +341,122 @@ class LookerOrderReport(models.Model):
     line_description = fields.Text(string='Line description')
     bar_description = fields.Text(string='Bar description')
 
+    def _order_field_label(self, field_name):
+        """Return human label for a sale.order field or the raw name as fallback."""
+        if not field_name:
+            return ''
+        # Support relational dotted names like partner_id.country_id
+        if isinstance(field_name, str) and '.' in field_name:
+            parts = field_name.split('.')
+            top = parts[0]
+            sub = parts[1] if len(parts) > 1 else None
+            # Try to resolve top field description
+            f_top = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order'), ('name', '=', top)], limit=1)
+            top_label = f_top.field_description if f_top and f_top.field_description else top
+            if sub and f_top and f_top.ttype == 'many2one' and f_top.relation:
+                f_sub = self.env['ir.model.fields'].sudo().search([('model', '=', f_top.relation), ('name', '=', sub)], limit=1)
+                sub_label = f_sub.field_description if f_sub and f_sub.field_description else sub
+                # Return e.g. "Quốc gia (Đối tác)"
+                return '%s (%s)' % (sub_label, top_label)
+            # Fallback: return the dotted name but replace '_' with ' '
+            return field_name.replace('_', ' ')
+        # Non-dotted field: look up directly on sale.order
+        f = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order'), ('name', '=', field_name)], limit=1)
+        return (f.field_description if f and f.field_description else (field_name or ''))
+
+    def _build_pie_description(self):
+        return ('Phân bố đơn hàng theo %s.' % self._order_field_label(self.group_field)) if self.group_field else 'Phân bố đơn hàng.'
+
+    def _build_bar_description(self):
+        if self.group_field and self.value_field:
+            val_label = self._order_field_label(self.value_field)
+            # avoid duplicated leading words like 'Tổng' -> produce 'Tổng Giá trị theo ...' instead of 'Tổng Tổng ...'
+            sval = val_label.strip()
+            if sval.lower() == 'tổng':
+                sval = 'giá trị'
+            elif sval.lower().startswith('tổng '):
+                sval = sval[5:].strip()
+            return 'Tổng %s theo %s.' % (sval, self._order_field_label(self.group_field))
+        if self.group_field:
+            return 'Số lượng đơn hàng theo %s.' % (self._order_field_label(self.group_field),)
+        return 'Giá trị theo danh mục.'
+
+    def _build_line_description(self):
+        domain_part = ' (có áp dụng bộ lọc)' if self.domain else ''
+        if self.value_field:
+            val_label = self._order_field_label(self.value_field)
+            sval = val_label.strip()
+            if sval.lower() == 'tổng':
+                sval = 'giá trị'
+            elif sval.lower().startswith('tổng '):
+                sval = sval[5:].strip()
+            return 'Xu hướng tổng %s theo ngày trong 14 ngày gần nhất%s.' % (sval, domain_part)
+        return 'Xu hướng số lượng đơn hàng trong 14 ngày gần nhất%s.' % domain_part
+
+    @api.onchange('group_field', 'value_field', 'domain')
+    def _onchange_auto_descriptions(self):
+        for rec in self:
+            if not rec.pie_description:
+                rec.pie_description = rec._build_pie_description()
+            if not rec.bar_description:
+                rec.bar_description = rec._build_bar_description()
+            if not rec.line_description:
+                rec.line_description = rec._build_line_description()
+
+    def _ensure_auto_descriptions(self, vals):
+        # Similar behavior to LookerReport: populate missing description keys
+        group_field = vals.get('group_field')
+        value_field = vals.get('value_field')
+        domain = vals.get('domain')
+
+        if not group_field and len(self) == 1 and self.exists():
+            group_field = self.group_field or group_field
+        if not value_field and len(self) == 1 and self.exists():
+            value_field = self.value_field or value_field
+        if not domain and len(self) == 1 and self.exists():
+            domain = self.domain or domain
+
+        pie = ('Phân bố đơn hàng theo %s.' % self._order_field_label(group_field)) if group_field else 'Phân bố đơn hàng.'
+        if group_field and value_field:
+            bar = 'Tổng %s theo %s.' % (self._order_field_label(value_field), self._order_field_label(group_field))
+        elif group_field:
+            bar = 'Số lượng đơn hàng theo %s.' % self._order_field_label(group_field)
+        else:
+            bar = 'Giá trị theo danh mục.'
+        if value_field:
+            line = 'Xu hướng tổng %s theo ngày trong 14 ngày gần nhất%s.' % (self._order_field_label(value_field), ' (có áp dụng bộ lọc)' if domain else '')
+        else:
+            line = 'Xu hướng số lượng đơn hàng trong 14 ngày gần nhất%s.' % (' (có áp dụng bộ lọc)' if domain else '')
+
+        if 'pie_description' not in vals:
+            vals['pie_description'] = pie
+        if 'bar_description' not in vals:
+            vals['bar_description'] = bar
+        if 'line_description' not in vals:
+            vals['line_description'] = line
+        return vals
+
+    def create(self, vals):
+        def ensure_and_validate(v):
+            if not v.get('group_field') or not v.get('value_field'):
+                raise UserError('Vui lòng chọn cả "Group By Field" và "Value Field" trước khi lưu báo cáo.')
+            return self._ensure_auto_descriptions(v)
+
+        if isinstance(vals, list):
+            vals = [ensure_and_validate(v) for v in vals]
+            return super(LookerOrderReport, self).create(vals)
+        vals = ensure_and_validate(vals)
+        return super(LookerOrderReport, self).create(vals)
+
+    def write(self, vals):
+        if isinstance(vals, dict):
+            vals = self._ensure_auto_descriptions(vals)
+        return super(LookerOrderReport, self).write(vals)
+
     @api.model
     def _get_order_group_fields(self):
-        allowed = ['partner_id', 'partner_id.country_id', 'partner_id.state_id', 'user_id', 'date_order', 'date_order_weekday']
+        # prefer partner.city for province/municipality grouping (customer 'city' field)
+        allowed = ['partner_id', 'partner_id.country_id', 'partner_id.city', 'user_id', 'date_order', 'date_order_weekday']
         res = []
         for name in allowed:
             # Try to find a field when it's a direct field on sale.order
@@ -359,7 +472,7 @@ class LookerOrderReport(models.Model):
                 # For relational subfields, present a friendly label
                 if name == 'partner_id.country_id':
                     res.append((name, 'Quốc gia (Đối tác)'))
-                elif name == 'partner_id.state_id':
+                elif name == 'partner_id.city':
                     res.append((name, 'Tỉnh/Thành (Đối tác)'))
         # Fallback: scan sale.order fields for common types
         if not res:
@@ -431,36 +544,113 @@ class LookerOrderReport(models.Model):
                     count_values.append(weekday_map.get(i, 0))
                     sum_values.append(round(sum_map.get(i, 0.0), 2))
             elif self.group_field and '.' in str(self.group_field):
-                # relational subgroup like partner_id.state_id
-                # perform read_group on the top-level relation
-                top = str(self.group_field).split('.')[0]
+                # relational subgroup like partner_id.state_id or partner_id.country_id
+                parts = str(self.group_field).split('.')
+                top = parts[0]
+                rel_field = parts[1] if len(parts) > 1 else None
                 try:
                     groups = Model.read_group(domain, [top], [top], lazy=False)
                 except Exception:
                     groups = []
+
+                # optional per-top sums when value_field is provided
+                sum_map_per_top = {}
+                if self.value_field:
+                    try:
+                        grp_sum = Model.read_group(domain, [top, self.value_field], [top], lazy=False)
+                    except Exception:
+                        grp_sum = []
+                    for g in grp_sum:
+                        key = g.get(top)
+                        tg = key[0] if isinstance(key, (list, tuple)) else key
+                        sum_map_per_top[tg] = g.get(self.value_field) or 0.0
+
+                # determine relation model for the top field (most often many2one)
+                rel_model = None
+                try:
+                    f_top = self.env['ir.model.fields'].sudo().search([('model', '=', 'sale.order'), ('name', '=', top)], limit=1)
+                    if f_top and f_top.ttype == 'many2one':
+                        rel_model = f_top.relation
+                except Exception:
+                    rel_model = None
+
+                buckets = {}
                 for g in groups:
                     key = g.get(top)
                     gid = key[0] if isinstance(key, (list, tuple)) else key
-                    lbl = key[1] if isinstance(key, (list, tuple)) and len(key) > 1 else (key or 'Undefined')
                     cnt = g.get('__count', 0)
-                    labels.append(str(lbl))
-                    count_values.append(cnt)
-                    # sums via read_group per related id might be expensive; omit or approximate
-                    sum_values.append(0.0)
+                    # find related target (e.g., partner.country_id)
+                    if not gid:
+                        rel_id = None
+                        rel_label = 'Undefined'
+                        rel_sum = 0.0
+                    else:
+                        rel_sum = sum_map_per_top.get(gid, 0.0)
+                        if rel_model:
+                            try:
+                                rel_rec = self.env[rel_model].sudo().browse(gid)
+                                target = getattr(rel_rec, rel_field, None)
+                                if target:
+                                    rel_id = target.id if hasattr(target, 'id') else target
+                                    rel_label = (target.name if hasattr(target, 'name') else str(target)) or 'Undefined'
+                                else:
+                                    rel_id = None
+                                    rel_label = 'Undefined'
+                            except Exception:
+                                rel_id = None
+                                rel_label = 'Undefined'
+                        else:
+                            # fallback: cannot resolve relation model, use top label
+                            rel_id = gid
+                            rel_label = (key[1] if isinstance(key, (list, tuple)) and len(key) > 1 else (key or 'Undefined'))
+
+                    if rel_id not in buckets:
+                        buckets[rel_id] = {'gid': rel_id, 'label': str(rel_label), 'count': 0, 'sum': 0.0}
+                    buckets[rel_id]['count'] += int(cnt or 0)
+                    buckets[rel_id]['sum'] += float(rel_sum or 0.0)
+
+                # convert buckets to entries
+                group_entries = []
+                for b in buckets.values():
+                    group_entries.append({'gid': b['gid'], 'label': b['label'], 'count': b['count'], 'sum': float(b['sum'])})
+
+                # Apply Top-N limit if requested (same logic as other branch)
+                limit_n = int(self.limit) if getattr(self, 'limit', 0) and int(self.limit) > 0 else 0
+                if limit_n and len(group_entries) > limit_n:
+                    sort_key = 'sum' if self.value_field else 'count'
+                    group_entries = sorted(group_entries, key=lambda x: x[sort_key], reverse=True)[:limit_n]
+
+                # Populate output arrays from entries
+                for entry in group_entries:
+                    labels.append(entry['label'])
+                    count_values.append(entry['count'])
+                    sum_values.append(entry['sum'])
             elif self.group_field:
                 try:
                     groups = Model.read_group(domain, [self.group_field], [self.group_field], lazy=False)
                 except Exception:
                     groups = []
+                # If a value_field is requested, compute per-group sums using read_group
+                sum_map = {}
+                if self.value_field:
+                    try:
+                        grp_sum = Model.read_group(domain, [self.group_field, self.value_field], [self.group_field], lazy=False)
+                    except Exception:
+                        grp_sum = []
+                    for gs in grp_sum:
+                        key = gs.get(self.group_field)
+                        gid = key[0] if isinstance(key, (list, tuple)) else key
+                        sum_map[gid] = gs.get(self.value_field) or 0.0
+
                 for g in groups:
                     key = g.get(self.group_field)
                     gid = key[0] if isinstance(key, (list, tuple)) else key
                     lbl = key[1] if isinstance(key, (list, tuple)) and len(key) > 1 else (key or 'Undefined')
                     cnt = g.get('__count', 0)
-                    sval = 0.0
+                    sval = sum_map.get(gid, cnt if not self.value_field else 0.0)
                     labels.append(str(lbl))
                     count_values.append(cnt)
-                    sum_values.append(sval)
+                    sum_values.append(float(sval or 0.0))
             else:
                 total = Model.search_count(domain)
                 labels = ['All']

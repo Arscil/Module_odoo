@@ -16,6 +16,9 @@
         'web.assets_backend': [
             'looker_studio/static/src/js/patch_removefacet.js',
         ],
+        'web.assets_web': [
+            'looker_studio/static/src/js/patch_removefacet.js',
+        ],
     },
     'installable': True,
     'application': False,
